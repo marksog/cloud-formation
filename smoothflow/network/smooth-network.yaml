@@ -1,0 +1,381 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  This is template for my Smoothflow VPC
+  - VPC cidr block is "10.0.0.0/16"
+  - 2 public subnets and 2 private subnets
+  - Each subnet has its own load balancer for its own servers
+  - we have security groups and each subnet and that for LB
+  - I WANT TO ALSO USE PARAMETERS, MAPPINGS AND CONDITIONS in this template just to understand what i am really doing.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - prod
+    Description: "Deployment environment"
+  
+  VpcCidr:
+    Type: String
+    Default: "10.0.0.0/16"
+    Description: "The entire VPC CIDR"
+  
+  PublicSubnetWebserverCidr:
+    Type: String
+    Default: "10.0.1.0/24"
+    Description: "CIDR for the public subnet 1 with app servers"
+  
+  PublicSubnetJenkinsCidr:
+    Type: String
+    Default: "10.0.2.0/24"
+    Description: "CIDR for the public subnet 2 with app servers"
+  
+  PrivateSubnetAppsCidr:
+    Type: String
+    Default: "10.0.11.0/24"
+    Description: "CIDR for the private subnet 1 with internal servers"
+  
+  PrivateSubnetDevAppCidr:
+    Type: String
+    Default: "10.0.12.0/24"
+    Description: "CIDR for the private subnet 2 with internal servers"
+
+Mappings:
+  EnvMap:
+    dev:
+      LBIdleTimeout: "60"
+    prod:
+      LBIdleTimeout: "60"
+  RegionMap:
+    us-east-1:
+      AMI: "ami-12345678"
+    us-west-1:
+      AMI: "ami-87654321"
+
+
+Conditions:
+  IsDev: !Equals [!Ref Environment, "dev"]
+  IsProd: !Equals [!Ref Environment, "prod"]
+
+
+Resources:
+  # ---------- Creating VPC ----------
+  SmoothflowVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub Smoothflow-${Environment}-VPC
+  
+  # ---------- Creating Internet Gateway ----------
+  SmoothflowInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub Smoothflow-${Environment}-IGW
+  
+  # ---------- Attaching Internet Gateway to VPC ----------
+  SmoothflowIGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref SmoothflowVPC
+      InternetGatewayId: !Ref SmoothflowInternetGateway
+
+  # ---------- Public Route Table ----------
+  SmoothflowPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref SmoothflowVPC
+      Tags:
+        - Key: Name
+          Value: !Sub Smoothflow-${Environment}-PublicRouteTable
+  
+  # ---------- Private Route Table ----------
+  SmoothflowPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref SmoothflowVPC
+      Tags:
+        - Key: Name
+          Value: !Sub Smoothflow-${Environment}-PrivateRouteTable
+
+  # ---------- creating public jenkins subnet ----------
+  SmoothflowPublicSubnetJenkins:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SmoothflowVPC
+      CidrBlock: !Ref PublicSubnetJenkinsCidr
+      AvailabilityZone: #!Select [ 0, !GetAZs !Ref 'AWS::Region' ]
+        Fn::Select:
+          - 0
+          - Fn::GetAZs: !Ref 'AWS::Region'
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !If
+            - IsProd
+            - Smoothflow-prod-jenkins-subnet
+            - Smoothflow-dev-jenkins-subnet
+  
+  # ---------- assocaiting public jenkins route table ----------
+  SmoothflowPublicSubnetJenkinsRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SmoothflowPublicSubnetJenkins
+      RouteTableId: !Ref SmoothflowPublicRouteTable
+
+  # ---------- creating public webserver subnet ----------
+  SmoothflowPublicSubnetWebserver:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SmoothflowVPC
+      CidrBlock: !Ref PublicSubnetWebserverCidr
+      AvailabilityZone: #!Select [ 1, !GetAZs !Ref 'AWS::Region' ]
+        Fn::Select:
+          - 1
+          - Fn::GetAZs: !Ref 'AWS::Region'
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !If
+            - IsProd
+            - Smoothflow-prod-webserver-subnet
+            - Smoothflow-dev-webserver-subnet
+  
+  # ---------- assocaiting public webserver route table ----------
+  SmoothflowPublicSubnetWebserverRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SmoothflowPublicSubnetWebserver
+      RouteTableId: !Ref SmoothflowPublicRouteTable
+  
+  # ---------- creating private app subnet ----------
+  SmoothflowPrivateSubnetApps:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SmoothflowVPC
+      CidrBlock: !Ref PrivateSubnetAppsCidr
+      AvailabilityZone: #!Select [ 0, !GetAZs !Ref 'AWS::Region' ]
+        Fn::Select:
+          - 0
+          - Fn::GetAZs: !Ref 'AWS::Region'
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !If
+            - IsProd
+            - Smoothflow-prod-apps-subnet
+            - Smoothflow-dev-apps-subnet
+  
+  # ---------- assocaiting private app route table ----------
+  SmoothflowPrivateSubnetAppsRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SmoothflowPrivateSubnetApps
+      RouteTableId: !Ref SmoothflowPrivateRouteTable
+
+  # ---------- creating private dev app subnet ----------
+  SmoothflowPrivateSubnetDevApp:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SmoothflowVPC
+      CidrBlock: !Ref PrivateSubnetDevAppCidr
+      AvailabilityZone: #!Select [ 1, !GetAZs !Ref 'AWS::Region' ]
+        Fn::Select:
+          - 1
+          - Fn::GetAZs: !Ref 'AWS::Region'
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !If
+            - IsProd
+            - Smoothflow-prod-dev-app-subnet
+            - Smoothflow-dev-dev-app-subnet
+  
+  # ---------- assocaiting private dev app route table ----------
+  SmoothflowPrivateSubnetDevAppRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SmoothflowPrivateSubnetDevApp
+      RouteTableId: !Ref SmoothflowPrivateRouteTable
+
+  # ---------- creating security groups (1 per LB in subnet) this is for jenkins LB ----------
+  PublicALBJenkingSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Allow HTTP and HTTPS traffic to jenkins servers"
+      VpcId: !Ref SmoothflowVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: "0.0.0.0/0"
+      Tags:
+        - Key: Name
+          Value: !Sub Smoothflow-${Environment}-PublicALB-Jenking-SG
+  
+  # ---------- creating security group for webservers for its LB ----------
+  PublicALBWebserverSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Allow HTTP and HTTPS traffic to web servers"
+      VpcId: !Ref SmoothflowVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: "0.0.0.0/0"
+      Tags:
+        - Key: Name
+          Value: !Sub Smoothflow-${Environment}-PublicALB-Webserver-SG
+  
+  # ---------- creating security group for private apps for its LB ----------
+  PrivateALBAppsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Allow HTTP and HTTPS traffic to app servers"
+      VpcId: !Ref SmoothflowVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !GetAtt [ SmoothflowVPC, CidrBlock ] # i just want only host withing the vpc to access this
+      Tags:
+        - Key: Name
+          Value: !Sub Smoothflow-${Environment}-PrivateALB-Apps-SG
+  
+  # ---------- creating security group for private dev apps for its LB ----------
+  PrivateALBDevAppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Allow HTTP and HTTPS traffic to dev app servers"
+      VpcId: !Ref SmoothflowVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !GetAtt [ SmoothflowVPC, CidrBlock ] # i just want only host withing the vpc to access this
+      Tags:
+        - Key: Name
+          Value: !Sub Smoothflow-${Environment}-PrivateALB-Dev-App-SG
+  
+  # now the fun part
+  # ---------- Load Balancers  (1 per subnet) ----------
+  # ---------- creating jenkins LB ----------
+  SmoothflowPublicSubnetJenkinsLB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub Smoothflow-${Environment}-Jenkins-LB
+      Scheme: internet-facing
+      Subnets:
+        - !Ref SmoothflowPublicSubnetJenkins
+        - !Ref SmoothflowPublicSubnetWebserver
+      SecurityGroups:
+        - !Ref PublicALBJenkingSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub Smoothflow-${Environment}-Jenkins-LB
+  
+  # ---------- creating webserver LB ----------
+  SmoothflowPublicSubnetWebserverLB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub Smoothflow-${Environment}-Webserver-LB
+      Scheme: internet-facing
+      Subnets:
+        - !Ref SmoothflowPublicSubnetWebserver
+        - !Ref SmoothflowPublicSubnetJenkins
+      SecurityGroups:
+        - !Ref PublicALBWebserverSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub Smoothflow-${Environment}-Webserver-LB
+  
+  # ---------- creating app LB ----------
+  SmoothflowPrivateSubnetAppsLB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub Smoothflow-${Environment}-Apps-LB
+      Scheme: internal
+      Subnets:
+        - !Ref SmoothflowPrivateSubnetApps
+        - !Ref SmoothflowPrivateSubnetDevApp
+      SecurityGroups:
+        - !Ref PrivateALBAppsSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub Smoothflow-${Environment}-Apps-LB
+  
+  # ---------- creating dev app LB ----------
+  SmoothflowPrivateSubnetDevAppLB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub Smoothflow-${Environment}-Dev-Apps-LB
+      Scheme: internal
+      Subnets:
+        - !Ref SmoothflowPrivateSubnetDevApp
+        - !Ref SmoothflowPrivateSubnetApps
+      SecurityGroups:
+        - !Ref PrivateALBDevAppSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub Smoothflow-${Environment}-Dev-Apps-LB
+
+Outputs:
+  SmoothflowVPCId:
+    Value: !Ref SmoothflowVPC
+    Description: "VPC ID"
+    Export:
+      Name: !Sub '${AWS::StackName}-VPC-ID'
+  
+  PublicSubnetIds:
+    Description: "List of public subnet IDs"
+    Value: !Join 
+      - ","
+      - [ !Ref SmoothflowPublicSubnetJenkins, !Ref SmoothflowPublicSubnetWebserver ]
+    Export:
+      Name: !Sub '${AWS::StackName}-Public-Subnet-IDs'
+  
+  PrivateSubnetIds:
+    Description: "List of private subnet IDs"
+    Value: !Join 
+      - ","
+      - [ !Ref SmoothflowPrivateSubnetApps, !Ref SmoothflowPrivateSubnetDevApp ]
+    Export:
+      Name: !Sub '${AWS::StackName}-Private-Subnet-IDs'
+  
+  PublicLDJenkinsDNSName:
+    Description: "DNS name of the Jenkins Load Balancer"
+    Value: !GetAtt [ SmoothflowPublicSubnetJenkinsLB, DNSName ]
+    Export:
+      Name: !Sub '${AWS::StackName}-Public-LB-Jenkins-DNS'
+  
+  PublicLDWebserverDNSName:
+    Description: "DNS name of the Webserver Load Balancer"
+    Value: !GetAtt [ SmoothflowPublicSubnetWebserverLB, DNSName ]
+    Export:
+      Name: !Sub '${AWS::StackName}-Public-LB-Webserver-DNS'
+
+  PrivateAppDNSName:
+    Description: "DNS name of the App Load Balancer"
+    Value: !GetAtt [ SmoothflowPrivateSubnetAppsLB, DNSName ]
+    Export:
+      Name: !Sub '${AWS::StackName}-Private-LB-Apps-DNS'
+  
+  PrivateDevAppDNSName:
+    Description: "DNS name of the Dev App Load Balancer"
+    Value: !GetAtt [ SmoothflowPrivateSubnetDevAppLB, DNSName ]
+    Export:
+      Name: !Sub '${AWS::StackName}-Private-LB-Dev-Apps-DNS'
+
+
+  
+
+  
+
+  
